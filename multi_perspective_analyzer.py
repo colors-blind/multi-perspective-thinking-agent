@@ -9,9 +9,21 @@ from langchain_core.messages import HumanMessage, SystemMessage
 load_dotenv()
 
 
-def clean_llm_output(text: str) -> str:
+def clean_llm_output(text) -> str:
     if not text:
         return ""
+    
+    if isinstance(text, list):
+        text_parts = []
+        for part in text:
+            if isinstance(part, str):
+                text_parts.append(part)
+            elif isinstance(part, dict) and 'text' in part:
+                text_parts.append(part['text'])
+        text = ''.join(text_parts)
+    
+    if not isinstance(text, str):
+        text = str(text)
     
     text = text.strip()
     
@@ -169,7 +181,18 @@ def call_llm(system_prompt: str, user_content: str, context: Dict = None) -> str
         messages.append(HumanMessage(content=context_str))
     
     response = llm.invoke(messages)
-    cleaned_content = clean_llm_output(response.content)
+    
+    content = response.content
+    if isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, str):
+                text_parts.append(part)
+            elif isinstance(part, dict) and 'text' in part:
+                text_parts.append(part['text'])
+        content = ''.join(text_parts)
+    
+    cleaned_content = clean_llm_output(content)
     return cleaned_content
 
 def analyze_user_perspective(state: AgentState) -> Dict:
