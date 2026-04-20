@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from typing import Dict, Optional
 from multi_perspective_analyzer import analyze_text, format_result
 from url_extractor import extract_content_from_url, is_valid_url
 from html_generator import generate_html_report
@@ -55,7 +56,7 @@ def get_url_input() -> str:
         
         return url
 
-def generate_html_output(result: Dict) -> str:
+def generate_html_output(result: Dict) -> Optional[str]:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = os.path.join(os.getcwd(), "reports")
     
