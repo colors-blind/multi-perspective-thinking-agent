@@ -12,9 +12,9 @@ if not GOOGLE_API_KEY:
     raise ValueError("请设置GOOGLE_API_KEY环境变量")
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3.0-pro-latest",
+    model="gemini-3.1-flash-lite-preview",
     google_api_key=GOOGLE_API_KEY,
-    temperature=0.7,
+    temperature=0.3,
 )
 
 class AgentState(TypedDict):
