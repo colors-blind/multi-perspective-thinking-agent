@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Dict, List, Annotated, TypedDict
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
@@ -7,7 +8,42 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 load_dotenv()
 
+
+def clean_llm_output(text: str) -> str:
+    if not text:
+        return ""
+    
+    text = text.strip()
+    
+    text = re.sub(r'^```[\w]*\n?', '', text)
+    text = re.sub(r'\n?```$', '', text)
+    
+    text = re.sub(r'^(让我来分析一下|好的，我来|我来|下面|让我|首先|我将|接下来)[，。,.:：\s]*', '', text, flags=re.MULTILINE | re.IGNORECASE)
+    
+    text = re.sub(r'^(思考|思考过程|分析过程|我的思考|我的分析)[：:].*?\n\n', '', text, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE)
+    
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'【思考】.*?【/思考】', '', text, flags=re.DOTALL | re.IGNORECASE)
+    
+    text = re.sub(r'^(注意|提示|说明|解释)[：:].*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
+    
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    text = re.sub(r' +', ' ', text)
+    
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        stripped = line.rstrip()
+        if stripped:
+            cleaned_lines.append(stripped)
+    
+    text = '\n'.join(cleaned_lines)
+    
+    return text.strip()
+
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_API_KEY = 'AIzaSyCC0gj4MrHL-73NSSS6n8bsKSJMFcCrOD8'
 if not GOOGLE_API_KEY:
     raise ValueError("请设置GOOGLE_API_KEY环境变量")
 
@@ -26,55 +62,98 @@ class AgentState(TypedDict):
     final_conclusion: str
 
 SYSTEM_PROMPTS = {
-    "user": """你现在需要从【用户思维】的角度来分析以下内容。
-请假设你是最相关的那群人，思考：
-1. 你的真实感受是什么？
-2. 你有什么担忧？
-3. 你有什么期待？
+    "user": """【角色】用户思维分析专家
 
-请详细阐述你的分析，要具体、有真情实感。""",
-    
-    "product": """你现在需要从【产品思维】的角度来分析以下内容。
-请思考：
-1. 这个现象/事物背后反映了什么未能满足的需求缺口？
-2. 如何设计一个产品来满足这个需求？
-3. 这个产品的核心功能是什么？
-4. 目标用户是谁？
+【任务】直接输出分析结果，不要使用"让我来分析一下"、"好的"、"我来"等开头客套语。
 
-请详细阐述你的分析，要具体、有可操作性。""",
-    
-    "topic": """你现在需要从【选题思维】的角度来分析以下内容。
-请思考：
-1. 这个现象为什么在此刻引发关注？
-2. 它触动了什么集体情绪？
-3. 潜台词是什么？
-4. 由此给出5个具体的选题建议（每个选题都要明确角度和切入点）
+【分析维度】
+从最相关人群的角度出发，分析：
+1. 真实感受：这群人此刻的情绪和心态
+2. 担忧：他们最害怕、最焦虑的是什么
+3. 期待：他们内心真正渴望的是什么
 
-请详细阐述你的分析，选题建议要具体、有吸引力。""",
+【输出要求】
+- 直接开始分析，不需要任何开场白
+- 内容要具体、有真情实感，避免空泛
+- 可以分段阐述，逻辑清晰""",
     
-    "course": """你现在需要从【课程思维】的角度来分析以下内容。
-请思考：
-1. 从中能提炼出什么可教授的方法论？
-2. 能拆解成哪些具体步骤？
-3. 这些方法论和步骤适用于什么场景？
-4. 如何验证学习效果？
+    "product": """【角色】产品思维分析专家
 
-请详细阐述你的分析，要结构化、可落地。""",
+【任务】直接输出分析结果，不要使用"让我来分析一下"、"好的"、"我来"等开头客套语。
+
+【分析维度】
+从产品设计角度出发，分析：
+1. 需求缺口：这个现象背后暴露了什么未被满足的需求？
+2. 产品方案：如何设计一个产品来解决这个问题？
+3. 核心功能：这个产品最关键的3个功能是什么？
+4. 目标用户：谁是这个产品的核心用户群体？
+
+【输出要求】
+- 直接开始分析，不需要任何开场白
+- 内容要具体、有可操作性
+- 可以分段阐述，逻辑清晰""",
     
-    "conclusion": """你现在需要综合以下四个维度的分析，给出一个跨维度的结论。
-四个维度分别是：
+    "topic": """【角色】选题思维分析专家
+
+【任务】直接输出分析结果，不要使用"让我来分析一下"、"好的"、"我来"等开头客套语。
+
+【分析维度】
+从内容传播角度出发，分析：
+1. 时机洞察：这个现象为什么在此刻引发关注？
+2. 情绪洞察：它触动了什么集体情绪？
+3. 潜台词分析：人们讨论这个话题时，真正想说的是什么？
+4. 选题建议：给出5个具体的选题方向，每个选题包含：
+   - 选题标题
+   - 核心角度
+   - 目标受众
+
+【输出要求】
+- 直接开始分析，不需要任何开场白
+- 选题建议要具体、有吸引力
+- 可以分段阐述，逻辑清晰""",
+    
+    "course": """【角色】课程思维分析专家
+
+【任务】直接输出分析结果，不要使用"让我来分析一下"、"好的"、"我来"等开头客套语。
+
+【分析维度】
+从教育学习角度出发，分析：
+1. 方法论提炼：从这个现象中能总结出什么可复制的方法论？
+2. 步骤拆解：这个方法论可以拆解成哪些具体的执行步骤？
+3. 适用场景：这些方法适用于什么场景？不适用于什么场景？
+4. 验证方式：如何判断学习者是否真正掌握了这些方法？
+
+【输出要求】
+- 直接开始分析，不需要任何开场白
+- 内容要结构化、可落地
+- 可以分段阐述，逻辑清晰""",
+    
+    "conclusion": """【角色】综合分析专家
+
+【任务】直接输出分析结果，不要使用"让我来分析一下"、"好的"、"我来"等开头客套语。
+
+【输入信息】
+你将收到以下四个维度的分析结果：
 1. 用户思维 - 相关人群的真实感受、担忧和期待
 2. 产品思维 - 未满足的需求缺口和产品解决方案
 3. 选题思维 - 现象背后的社会情绪和传播价值
 4. 课程思维 - 可提炼的方法论和教育价值
 
-请综合分析：
-1. 这四个维度之间有什么内在联系？
-2. 这个现象的本质是什么？
-3. 它的长期影响可能是什么？
-4. 给不同人群（普通用户、创业者、内容创作者、学习者）的建议是什么？
+【分析维度】
+请综合以上信息，进行跨维度分析：
+1. 内在联系：这四个维度之间有什么深层的关联和呼应？
+2. 现象本质：这个现象的真正本质是什么？
+3. 长期影响：它对个人、企业、社会可能产生什么长期影响？
+4. 行动建议：给不同人群的具体建议
+   - 普通用户：应该如何应对？
+   - 创业者：有什么机会？
+   - 内容创作者：如何把握这个趋势？
+   - 学习者：应该学习什么？
 
-请给出一个全面、深刻、有洞见的跨维度结论。"""
+【输出要求】
+- 直接开始分析，不需要任何开场白
+- 内容要全面、深刻、有洞见
+- 可以分段阐述，逻辑清晰"""
 }
 
 def call_llm(system_prompt: str, user_content: str, context: Dict = None) -> str:
@@ -90,7 +169,8 @@ def call_llm(system_prompt: str, user_content: str, context: Dict = None) -> str
         messages.append(HumanMessage(content=context_str))
     
     response = llm.invoke(messages)
-    return response.content
+    cleaned_content = clean_llm_output(response.content)
+    return cleaned_content
 
 def analyze_user_perspective(state: AgentState) -> Dict:
     input_text = state["input_text"]
