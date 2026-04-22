@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多视角分析 Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .card-hover {
+            transition: all 0.3s ease;
+        }
+        
+        .card-hover:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+        
+        .input-tab-active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .input-tab-inactive {
+            background: #f3f4f6;
+            color: #6b7280;
+        }
+        
+        .input-tab-inactive:hover {
+            background: #e5e7eb;
+        }
+        
+        .perspective-card {
+            border-left: 4px solid;
+        }
+        
+        .user-card {
+            border-left-color: #3b82f6;
+        }
+        
+        .product-card {
+            border-left-color: #10b981;
+        }
+        
+        .topic-card {
+            border-left-color: #f59e0b;
+        }
+        
+        .course-card {
+            border-left-color: #8b5cf6;
+        }
+        
+        .conclusion-card {
+            border-left-color: #ec4899;
+            background: linear-gradient(135deg, #fdf4ff 0%, #f5f3ff 100%);
+        }
+        
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-in-out;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .scroll-smooth {
+            scroll-behavior: smooth;
+        }
+        
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        
+        textarea:focus, input:focus {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.3);
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            transition: all 0.3s ease;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .result-content {
+            white-space: pre-wrap;
+            line-height: 1.8;
+        }
+        
+        .markdown-content h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1f2937;
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+        
+        .markdown-content h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #374151;
+            margin-top: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .markdown-content h3 {
+            font-size: 1.125rem;
+            font-weight: 500;
+            color: #4b5563;
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .markdown-content h4 {
+            font-size: 1rem;
+            font-weight: 500;
+            color: #6b7280;
+            margin-top: 0.75rem;
+            margin-bottom: 0.25rem;
+        }
+        
+        .markdown-content p {
+            margin-bottom: 0.75rem;
+        }
+        
+        .markdown-content ul, .markdown-content ol {
+            margin-left: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+        
+        .markdown-content li {
+            margin-bottom: 0.25rem;
+        }
+        
+        .markdown-content ul {
+            list-style-type: disc;
+        }
+        
+        .markdown-content ol {
+            list-style-type: decimal;
+        }
+        
+        .markdown-content strong {
+            font-weight: 600;
+            color: #1f2937;
+        }
+        
+        .markdown-content em {
+            font-style: italic;
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen scroll-smooth">
+    <header class="gradient-bg text-white py-12 px-6">
+        <div class="max-w-5xl mx-auto">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-4xl font-bold mb-3">🤖 多视角分析 Agent</h1>
+                    <p class="text-purple-100 text-lg">从五个维度深度洞察事件本质</p>
+                </div>
+                <div class="hidden md:block">
+                    <div class="flex space-x-2">
+                        <span class="px-3 py-1 bg-white/20 rounded-full text-sm">📝 文本输入</span>
+                        <span class="px-3 py-1 bg-white/20 rounded-full text-sm">🌐 URL输入</span>
+                        <span class="px-3 py-1 bg-white/20 rounded-full text-sm">📊 多视角分析</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-5xl mx-auto px-6 py-10">
+        
+        <section id="input-section" class="mb-10 fade-in">
+            <div class="bg-white rounded-2xl shadow-lg p-8 card-hover">
+                
+                <div class="flex items-center mb-6">
+                    <div class="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center mr-4">
+                        <span class="text-2xl">✍️</span>
+                    </div>
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-800">输入分析内容</h2>
+                        <p class="text-gray-500 text-sm">选择输入方式，开始多视角分析</p>
+                    </div>
+                </div>
+                
+                <div class="flex space-x-2 mb-6">
+                    <button id="tab-text" onclick="switchInputType('text')" 
+                        class="input-tab-active px-6 py-3 rounded-lg font-medium transition-all">
+                        📝 直接输入文本
+                    </button>
+                    <button id="tab-url" onclick="switchInputType('url')" 
+                        class="input-tab-inactive px-6 py-3 rounded-lg font-medium transition-all">
+                        🌐 输入URL地址
+                    </button>
+                </div>
+                
+                <div id="text-input-container">
+                    <label class="block text-gray-700 font-medium mb-2">新闻或现象描述</label>
+                    <textarea id="text-input" 
+                        class="w-full h-40 p-4 border border-gray-300 rounded-xl resize-none transition-all"
+                        placeholder="请输入一段新闻或现象描述，例如：&#10;&#10;AI造成了大量裁员&#10;&#10;近年来，人工智能技术的快速发展引发了广泛的社会关注..."></textarea>
+                </div>
+                
+                <div id="url-input-container" class="hidden">
+                    <label class="block text-gray-700 font-medium mb-2">新闻URL地址</label>
+                    <input type="url" id="url-input" 
+                        class="w-full p-4 border border-gray-300 rounded-xl transition-all"
+                        placeholder="请输入新闻URL，例如：https://example.com/news/ai-layoffs">
+                    <p class="text-gray-500 text-sm mt-2">
+                        💡 提示：程序会自动提取网页中的正文内容进行分析
+                    </p>
+                </div>
+                
+                <div class="mt-6 flex items-center justify-between">
+                    <div id="char-count" class="text-gray-500 text-sm">
+                        已输入 <span id="count">0</span> 个字符
+                    </div>
+                    <button id="analyze-btn" onclick="startAnalysis()" 
+                        class="btn-primary text-white px-8 py-3 rounded-xl font-medium flex items-center space-x-2">
+                        <span>🚀 开始分析</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+        
+        <section id="loading-section" class="mb-10 hidden">
+            <div class="bg-white rounded-2xl shadow-lg p-12 text-center">
+                <div class="loading-spinner mx-auto mb-6"></div>
+                <h3 class="text-xl font-semibold text-gray-800 mb-2">正在进行多视角分析...</h3>
+                <p class="text-gray-500" id="loading-status">AI 正在从五个维度分析您的内容，请稍候...</p>
+            </div>
+        </section>
+        
+        <section id="error-section" class="mb-10 hidden">
+            <div class="bg-red-50 border border-red-200 rounded-2xl p-6">
+                <div class="flex items-start">
+                    <div class="flex-shrink-0">
+                        <span class="text-2xl">❌</span>
+                    </div>
+                    <div class="ml-4">
+                        <h3 class="text-lg font-semibold text-red-800 mb-1">分析失败</h3>
+                        <p id="error-message" class="text-red-600"></p>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section id="result-section" class="mb-10 hidden">
+            
+            <div class="text-center mb-8">
+                <h2 class="text-3xl font-bold text-gray-800 mb-2">📊 分析报告</h2>
+                <p class="text-gray-500">从五个维度深度洞察事件本质</p>
+                <a id="html-report-link" href="#" target="_blank" 
+                    class="inline-flex items-center mt-4 text-purple-600 hover:text-purple-800 font-medium transition-colors">
+                    <span class="mr-2">📄</span>
+                    查看完整HTML报告
+                </a>
+            </div>
+            
+            <div id="user-perspective" class="mb-6 fade-in">
+                <div class="bg-white rounded-2xl shadow-lg p-8 card-hover perspective-card user-card">
+                    <div class="flex items-center mb-6">
+                        <div class="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center mr-4">
+                            <span class="text-2xl">👤</span>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-gray-800">视角一：用户思维</h3>
+                            <p class="text-gray-500 text-sm">相关人群的真实感受、担忧与期待</p>
+                        </div>
+                    </div>
+                    <div class="bg-blue-50 rounded-xl p-6 border border-blue-100">
+                        <div id="user-content" class="markdown-content text-gray-700 leading-relaxed">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="product-perspective" class="mb-6 fade-in">
+                <div class="bg-white rounded-2xl shadow-lg p-8 card-hover perspective-card product-card">
+                    <div class="flex items-center mb-6">
+                        <div class="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center mr-4">
+                            <span class="text-2xl">💡</span>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-gray-800">视角二：产品思维</h3>
+                            <p class="text-gray-500 text-sm">需求缺口分析与产品解决方案</p>
+                        </div>
+                    </div>
+                    <div class="bg-green-50 rounded-xl p-6 border border-green-100">
+                        <div id="product-content" class="markdown-content text-gray-700 leading-relaxed">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="topic-perspective" class="mb-6 fade-in">
+                <div class="bg-white rounded-2xl shadow-lg p-8 card-hover perspective-card topic-card">
+                    <div class="flex items-center mb-6">
+                        <div class="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center mr-4">
+                            <span class="text-2xl">📰</span>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-gray-800">视角三：选题思维</h3>
+                            <p class="text-gray-500 text-sm">社会情绪洞察与传播价值分析</p>
+                        </div>
+                    </div>
+                    <div class="bg-amber-50 rounded-xl p-6 border border-amber-100">
+                        <div id="topic-content" class="markdown-content text-gray-700 leading-relaxed">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="course-perspective" class="mb-6 fade-in">
+                <div class="bg-white rounded-2xl shadow-lg p-8 card-hover perspective-card course-card">
+                    <div class="flex items-center mb-6">
+                        <div class="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center mr-4">
+                            <span class="text-2xl">📚</span>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-gray-800">视角四：课程思维</h3>
+                            <p class="text-gray-500 text-sm">可提炼的方法论与教育价值</p>
+                        </div>
+                    </div>
+                    <div class="bg-purple-50 rounded-xl p-6 border border-purple-100">
+                        <div id="course-content" class="markdown-content text-gray-700 leading-relaxed">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="conclusion-perspective" class="mb-6 fade-in">
+                <div class="bg-white rounded-2xl shadow-lg p-8 card-hover perspective-card conclusion-card">
+                    <div class="flex items-center mb-6">
+                        <div class="w-12 h-12 bg-pink-100 rounded-xl flex items-center justify-center mr-4">
+                            <span class="text-2xl">🎯</span>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-gray-800">跨维度综合结论</h3>
+                            <p class="text-gray-500 text-sm">整合四维度分析的深度洞察</p>
+                        </div>
+                    </div>
+                    <div class="bg-gradient-to-r from-pink-50 to-purple-50 rounded-xl p-6 border border-pink-200">
+                        <div id="conclusion-content" class="markdown-content text-gray-700 leading-relaxed">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="text-center mt-8">
+                <button onclick="scrollToTop()" 
+                    class="text-purple-600 hover:text-purple-800 font-medium transition-colors">
+                    <span class="mr-2">↑</span>
+                    返回顶部
+                </button>
+            </div>
+        </section>
+    </main>
+
+    <footer class="bg-gray-800 text-gray-400 py-8 px-6 mt-12">
+        <div class="max-w-5xl mx-auto text-center">
+            <p class="mb-2">🤖 多视角分析 Agent</p>
+            <p class="text-sm text-gray-500">Powered by LangGraph & Google Gemini</p>
+        </div>
+    </footer>
+
+    <script>
+        let currentInputType = 'text';
+        let htmlReportUrl = null;
+        
+        function switchInputType(type) {
+            currentInputType = type;
+            
+            const textTab = document.getElementById('tab-text');
+            const urlTab = document.getElementById('tab-url');
+            const textContainer = document.getElementById('text-input-container');
+            const urlContainer = document.getElementById('url-input-container');
+            
+            if (type === 'text') {
+                textTab.className = 'input-tab-active px-6 py-3 rounded-lg font-medium transition-all';
+                urlTab.className = 'input-tab-inactive px-6 py-3 rounded-lg font-medium transition-all';
+                textContainer.classList.remove('hidden');
+                urlContainer.classList.add('hidden');
+            } else {
+                textTab.className = 'input-tab-inactive px-6 py-3 rounded-lg font-medium transition-all';
+                urlTab.className = 'input-tab-active px-6 py-3 rounded-lg font-medium transition-all';
+                textContainer.classList.add('hidden');
+                urlContainer.classList.remove('hidden');
+            }
+            
+            updateCharCount();
+        }
+        
+        function updateCharCount() {
+            const textInput = document.getElementById('text-input');
+            const urlInput = document.getElementById('url-input');
+            const countSpan = document.getElementById('count');
+            const charCountDiv = document.getElementById('char-count');
+            
+            if (currentInputType === 'text') {
+                countSpan.textContent = textInput.value.length;
+                charCountDiv.classList.remove('hidden');
+            } else {
+                charCountDiv.classList.add('hidden');
+            }
+        }
+        
+        function parseMarkdown(text) {
+            if (!text) return '';
+            
+            let html = text;
+            
+            html = html.replace(/^#{4}\s+(.+)$/gm, '<h4>$1</h4>');
+            html = html.replace(/^#{3}\s+(.+)$/gm, '<h3>$1</h3>');
+            html = html.replace(/^#{2}\s+(.+)$/gm, '<h2>$1</h2>');
+            html = html.replace(/^#{1}\s+(.+)$/gm, '<h1>$1</h1>');
+            
+            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+            
+            html = html.split('\n\n').map(para => {
+                para = para.trim();
+                if (!para) return '';
+                
+                if (para.startsWith('<h1>') || para.startsWith('<h2>') || para.startsWith('<h3>') || para.startsWith('<h4>')) {
+                    return para;
+                }
+                
+                const lines = para.split('\n');
+                let isList = true;
+                lines.forEach(line => {
+                    if (line.trim()) {
+                        if (!line.trim().match(/^[\*\-\+]\s+/) && !line.trim().match(/^\d+\.\s+/)) {
+                            isList = false;
+                        }
+                    }
+                });
+                
+                if (isList && lines.some(l => l.trim())) {
+                    let listHtml = '';
+                    let currentListType = null;
+                    let listItems = [];
+                    
+                    lines.forEach(line => {
+                        line = line.trim();
+                        if (!line) return;
+                        
+                        let match = line.match(/^([\*\-\+])\s+(.+)$/);
+                        if (match) {
+                            if (currentListType !== 'ul') {
+                                if (listItems.length > 0) {
+                                    listHtml += currentListType === 'ul' ? '<ul>' + listItems.join('') + '</ul>' : '<ol>' + listItems.join('') + '</ol>';
+                                }
+                                listItems = [];
+                                currentListType = 'ul';
+                            }
+                            listItems.push('<li>' + match[2] + '</li>');
+                            return;
+                        }
+                        
+                        match = line.match(/^(\d+)\.\s+(.+)$/);
+                        if (match) {
+                            if (currentListType !== 'ol') {
+                                if (listItems.length > 0) {
+                                    listHtml += currentListType === 'ul' ? '<ul>' + listItems.join('') + '</ul>' : '<ol>' + listItems.join('') + '</ol>';
+                                }
+                                listItems = [];
+                                currentListType = 'ol';
+                            }
+                            listItems.push('<li>' + match[2] + '</li>');
+                        }
+                    });
+                    
+                    if (listItems.length > 0) {
+                        listHtml += currentListType === 'ul' ? '<ul>' + listItems.join('') + '</ul>' : '<ol>' + listItems.join('') + '</ol>';
+                    }
+                    
+                    return listHtml;
+                }
+                
+                return '<p>' + para.replace(/\n/g, '<br>') + '</p>';
+            }).filter(p => p).join('');
+            
+            return html;
+        }
+        
+        function showLoading() {
+            document.getElementById('input-section').classList.add('hidden');
+            document.getElementById('result-section').classList.add('hidden');
+            document.getElementById('error-section').classList.add('hidden');
+            document.getElementById('loading-section').classList.remove('hidden');
+        }
+        
+        function hideLoading() {
+            document.getElementById('loading-section').classList.add('hidden');
+        }
+        
+        function showError(message) {
+            hideLoading();
+            document.getElementById('error-message').textContent = message;
+            document.getElementById('error-section').classList.remove('hidden');
+            document.getElementById('input-section').classList.remove('hidden');
+        }
+        
+        function showResult(result) {
+            hideLoading();
+            document.getElementById('error-section').classList.add('hidden');
+            document.getElementById('input-section').classList.remove('hidden');
+            document.getElementById('result-section').classList.remove('hidden');
+            
+            document.getElementById('user-content').innerHTML = parseMarkdown(result.user_perspective || '');
+            document.getElementById('product-content').innerHTML = parseMarkdown(result.product_perspective || '');
+            document.getElementById('topic-content').innerHTML = parseMarkdown(result.topic_perspective || '');
+            document.getElementById('course-content').innerHTML = parseMarkdown(result.course_perspective || '');
+            document.getElementById('conclusion-content').innerHTML = parseMarkdown(result.final_conclusion || '');
+            
+            if (result.html_report) {
+                htmlReportUrl = result.html_report;
+                document.getElementById('html-report-link').href = result.html_report;
+                document.getElementById('html-report-link').classList.remove('hidden');
+            } else {
+                document.getElementById('html-report-link').classList.add('hidden');
+            }
+            
+            document.getElementById('result-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        
+        function scrollToTop() {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        
+        async function startAnalysis() {
+            const analyzeBtn = document.getElementById('analyze-btn');
+            
+            let content = '';
+            if (currentInputType === 'text') {
+                content = document.getElementById('text-input').value.trim();
+                if (!content) {
+                    alert('请输入分析内容');
+                    return;
+                }
+            } else {
+                content = document.getElementById('url-input').value.trim();
+                if (!content) {
+                    alert('请输入URL地址');
+                    return;
+                }
+                if (!content.startsWith('http://') && !content.startsWith('https://')) {
+                    alert('URL格式不正确，请确保包含 http:// 或 https://');
+                    return;
+                }
+            }
+            
+            analyzeBtn.disabled = true;
+            analyzeBtn.innerHTML = '<span>⏳ 分析中...</span>';
+            
+            showLoading();
+            
+            try {
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        type: currentInputType,
+                        content: content
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showResult(data.data);
+                    
+                    if (data.html_report) {
+                        htmlReportUrl = data.html_report;
+                        document.getElementById('html-report-link').href = data.html_report;
+                    }
+                } else {
+                    showError(data.error || '分析失败，请稍后重试');
+                }
+            } catch (error) {
+                showError('网络请求失败: ' + error.message);
+            } finally {
+                analyzeBtn.disabled = false;
+                analyzeBtn.innerHTML = '<span>🚀 开始分析</span>';
+            }
+        }
+        
+        document.getElementById('text-input').addEventListener('input', updateCharCount);
+        document.getElementById('url-input').addEventListener('input', updateCharCount);
+        
+        updateCharCount();
+    </script>
+</body>
+</html>

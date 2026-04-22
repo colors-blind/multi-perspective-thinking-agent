@@ -1,5 +1,9 @@
+import os
+from datetime import datetime
+from typing import Dict, Optional
 from multi_perspective_analyzer import analyze_text, format_result
 from url_extractor import extract_content_from_url, is_valid_url
+from html_generator import generate_html_report
 
 def get_input_mode() -> str:
     print("\n📋 请选择输入模式:")
@@ -52,13 +56,31 @@ def get_url_input() -> str:
         
         return url
 
-def analyze_with_content(content: str, source_type: str = "文本"):
+def generate_html_output(result: Dict) -> Optional[str]:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = os.path.join(os.getcwd(), "reports")
+    
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    output_path = os.path.join(output_dir, f"analysis_report_{timestamp}.html")
+    
+    try:
+        generate_html_report(result, output_path)
+        return output_path
+    except Exception as e:
+        print(f"⚠️  生成HTML报告失败: {e}")
+        return None
+
+def analyze_with_content(content: str, source_type: str = "文本") -> Dict:
     print(f"\n🔍 正在分析{source_type}内容，请稍候...\n")
     
     result = analyze_text(content)
     formatted_output = format_result(result)
     
     print(formatted_output)
+    
+    return result
 
 def main():
     print("=" * 60)
@@ -75,6 +97,8 @@ def main():
                 print("\n👋 感谢使用，再见！")
                 break
             
+            result = None
+            
             if mode == '1':
                 content = get_text_input()
                 if not content:
@@ -82,7 +106,7 @@ def main():
                     continue
                 
                 print(f"\n✅ 成功获取文本内容 ({len(content)} 字符)")
-                analyze_with_content(content, "文本")
+                result = analyze_with_content(content, "文本")
             
             elif mode == '2':
                 url = get_url_input()
@@ -98,7 +122,7 @@ def main():
                     print(f"   标题: {url_result['title']}")
                     print(f"   内容长度: {len(url_result['content'])} 字符")
                     
-                    analyze_with_content(content, "URL")
+                    result = analyze_with_content(content, "URL")
                     
                 except Exception as e:
                     print(f"\n❌ 获取URL内容失败: {e}")
@@ -107,6 +131,24 @@ def main():
                     print("   2. 网络连接是否正常")
                     print("   3. 网站是否需要特殊权限访问")
                     continue
+            
+            if result:
+                print("\n" + "=" * 60)
+                print("📄 是否生成HTML报告？")
+                print("=" * 60)
+                print("   y - 生成优美的HTML报告")
+                print("   n - 不生成，继续使用")
+                
+                html_choice = input("\n请选择 (y/n): ").strip().lower()
+                
+                if html_choice == 'y':
+                    print("\n📤 正在生成HTML报告...")
+                    html_path = generate_html_output(result)
+                    
+                    if html_path:
+                        print(f"\n✅ HTML报告已生成:")
+                        print(f"   📁 保存位置: {html_path}")
+                        print(f"\n💡 提示: 您可以用浏览器打开此文件查看美观的报告")
             
             print("\n" + "=" * 60)
             print("分析完成！选择下一步操作：")
