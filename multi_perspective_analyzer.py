@@ -55,7 +55,6 @@ def clean_llm_output(text) -> str:
     return text.strip()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GOOGLE_API_KEY = 'AIzaSyCC0gj4MrHL-73NSSS6n8bsKSJMFcCrOD8'
 if not GOOGLE_API_KEY:
     raise ValueError("请设置GOOGLE_API_KEY环境变量")
 
