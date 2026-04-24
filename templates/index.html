@@ -332,11 +332,43 @@
             <div class="text-center mb-8">
                 <h2 class="text-3xl font-bold text-gray-800 mb-2">📊 分析报告</h2>
                 <p class="text-gray-500">从五个维度深度洞察事件本质</p>
-                <a id="html-report-link" href="#" target="_blank" 
-                    class="inline-flex items-center mt-4 text-purple-600 hover:text-purple-800 font-medium transition-colors">
-                    <span class="mr-2">📄</span>
-                    查看完整HTML报告
-                </a>
+                
+                <div class="flex flex-wrap justify-center items-center gap-3 mt-6">
+                    <a id="html-report-link" href="#" target="_blank" 
+                        class="inline-flex items-center px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-all">
+                        <span class="mr-2">🌐</span>
+                        HTML报告
+                    </a>
+                    
+                    <button id="export-md-btn" onclick="exportMarkdown()" 
+                        class="inline-flex items-center px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-all">
+                        <span class="mr-2">📝</span>
+                        导出Markdown
+                    </button>
+                    
+                    <button id="export-pdf-btn" onclick="exportPDF()" 
+                        class="inline-flex items-center px-4 py-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg font-medium transition-all">
+                        <span class="mr-2">📕</span>
+                        导出PDF
+                    </button>
+                    
+                    <button id="export-all-btn" onclick="exportAll()" 
+                        class="inline-flex items-center px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg font-medium transition-all">
+                        <span class="mr-2">�</span>
+                        导出全部
+                    </button>
+                </div>
+                
+                <div id="export-status" class="mt-4 hidden">
+                    <div class="inline-flex items-center px-4 py-2 bg-blue-50 text-blue-700 rounded-lg">
+                        <div class="loading-spinner w-4 h-4 mr-2" style="border-width: 2px;"></div>
+                        <span id="export-status-text">正在导出...</span>
+                    </div>
+                </div>
+                
+                <div id="export-result" class="mt-4 hidden">
+                    <div id="export-result-content"></div>
+                </div>
             </div>
             
             <div id="image-section" class="mb-8 fade-in">
@@ -510,6 +542,7 @@
         let currentImageStyle = 'professional';
         let htmlReportUrl = null;
         let imagePollingInterval = null;
+        let currentResultId = null;
         
         function switchInputType(type) {
             currentInputType = type;
@@ -823,6 +856,7 @@
                 const data = await response.json();
                 
                 if (data.success) {
+                    currentResultId = data.result_id;
                     showResult(data.data);
                     
                     if (data.html_report) {
@@ -834,6 +868,8 @@
                         resetImageSection();
                         pollImageStatus(data.image_task_id);
                     }
+                    
+                    resetExportStatus();
                 } else {
                     showError(data.error || '分析失败，请稍后重试');
                 }
@@ -849,6 +885,226 @@
         document.getElementById('url-input').addEventListener('input', updateCharCount);
         
         updateCharCount();
+        
+        function resetExportStatus() {
+            document.getElementById('export-status').classList.add('hidden');
+            document.getElementById('export-result').classList.add('hidden');
+        }
+        
+        function showExportStatus(statusText) {
+            document.getElementById('export-status').classList.remove('hidden');
+            document.getElementById('export-result').classList.add('hidden');
+            document.getElementById('export-status-text').textContent = statusText;
+        }
+        
+        function showExportResult(success, message, downloadUrl = null) {
+            document.getElementById('export-status').classList.add('hidden');
+            document.getElementById('export-result').classList.remove('hidden');
+            
+            const resultContent = document.getElementById('export-result-content');
+            
+            if (success) {
+                if (downloadUrl) {
+                    resultContent.innerHTML = `
+                        <div class="inline-flex items-center px-4 py-2 bg-green-50 text-green-700 rounded-lg">
+                            <span class="mr-2">✅</span>
+                            <span class="mr-2">${message}</span>
+                            <a href="${downloadUrl}" target="_blank" 
+                               class="text-green-700 underline hover:text-green-900 font-medium">
+                                点击下载
+                            </a>
+                        </div>
+                    `;
+                } else {
+                    resultContent.innerHTML = `
+                        <div class="inline-flex items-center px-4 py-2 bg-green-50 text-green-700 rounded-lg">
+                            <span class="mr-2">✅</span>
+                            <span>${message}</span>
+                        </div>
+                    `;
+                }
+            } else {
+                resultContent.innerHTML = `
+                    <div class="inline-flex items-center px-4 py-2 bg-red-50 text-red-700 rounded-lg">
+                        <span class="mr-2">❌</span>
+                        <span>${message}</span>
+                    </div>
+                `;
+            }
+        }
+        
+        function setExportButtonsEnabled(enabled) {
+            const buttons = ['export-md-btn', 'export-pdf-btn', 'export-all-btn'];
+            buttons.forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) {
+                    btn.disabled = !enabled;
+                    btn.style.opacity = enabled ? '1' : '0.6';
+                    btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+                }
+            });
+        }
+        
+        async function exportMarkdown() {
+            if (!currentResultId) {
+                alert('请先进行分析，然后再导出');
+                return;
+            }
+            
+            setExportButtonsEnabled(false);
+            showExportStatus('正在导出 Markdown...');
+            
+            try {
+                const response = await fetch('/api/export/markdown', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        result_id: currentResultId
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showExportResult(
+                        true,
+                        `Markdown导出成功: ${data.data.filename}`,
+                        data.data.download_url
+                    );
+                } else {
+                    showExportResult(false, data.error || '导出失败');
+                }
+            } catch (error) {
+                showExportResult(false, `网络请求失败: ${error.message}`);
+            } finally {
+                setExportButtonsEnabled(true);
+            }
+        }
+        
+        async function exportPDF() {
+            if (!currentResultId) {
+                alert('请先进行分析，然后再导出');
+                return;
+            }
+            
+            setExportButtonsEnabled(false);
+            showExportStatus('正在导出 PDF...');
+            
+            try {
+                const response = await fetch('/api/export/pdf', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        result_id: currentResultId
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showExportResult(
+                        true,
+                        `PDF导出成功: ${data.data.filename}`,
+                        data.data.download_url
+                    );
+                } else {
+                    showExportResult(false, data.error || '导出失败');
+                }
+            } catch (error) {
+                showExportResult(false, `网络请求失败: ${error.message}`);
+            } finally {
+                setExportButtonsEnabled(true);
+            }
+        }
+        
+        async function exportAll() {
+            if (!currentResultId) {
+                alert('请先进行分析，然后再导出');
+                return;
+            }
+            
+            setExportButtonsEnabled(false);
+            showExportStatus('正在导出所有格式...');
+            
+            try {
+                const response = await fetch('/api/export/all', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        result_id: currentResultId
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const results = data.data;
+                    let resultHtml = '<div class="flex flex-col gap-2">';
+                    
+                    if (results.markdown) {
+                        if (results.markdown.error) {
+                            resultHtml += `
+                                <div class="inline-flex items-center px-4 py-2 bg-orange-50 text-orange-700 rounded-lg">
+                                    <span class="mr-2">⚠️</span>
+                                    <span>Markdown: ${results.markdown.error}</span>
+                                </div>
+                            `;
+                        } else {
+                            resultHtml += `
+                                <div class="inline-flex items-center px-4 py-2 bg-green-50 text-green-700 rounded-lg">
+                                    <span class="mr-2">✅</span>
+                                    <span class="mr-2">Markdown: ${results.markdown.filename}</span>
+                                    <a href="${results.markdown.download_url}" target="_blank" 
+                                       class="text-green-700 underline hover:text-green-900 font-medium">
+                                        下载
+                                    </a>
+                                </div>
+                            `;
+                        }
+                    }
+                    
+                    if (results.pdf) {
+                        if (results.pdf.error) {
+                            resultHtml += `
+                                <div class="inline-flex items-center px-4 py-2 bg-orange-50 text-orange-700 rounded-lg">
+                                    <span class="mr-2">⚠️</span>
+                                    <span>PDF: ${results.pdf.error}</span>
+                                </div>
+                            `;
+                        } else {
+                            resultHtml += `
+                                <div class="inline-flex items-center px-4 py-2 bg-green-50 text-green-700 rounded-lg">
+                                    <span class="mr-2">✅</span>
+                                    <span class="mr-2">PDF: ${results.pdf.filename}</span>
+                                    <a href="${results.pdf.download_url}" target="_blank" 
+                                       class="text-green-700 underline hover:text-green-900 font-medium">
+                                        下载
+                                    </a>
+                                </div>
+                            `;
+                        }
+                    }
+                    
+                    resultHtml += '</div>';
+                    
+                    document.getElementById('export-status').classList.add('hidden');
+                    document.getElementById('export-result').classList.remove('hidden');
+                    document.getElementById('export-result-content').innerHTML = resultHtml;
+                } else {
+                    showExportResult(false, data.error || '导出失败');
+                }
+            } catch (error) {
+                showExportResult(false, `网络请求失败: ${error.message}`);
+            } finally {
+                setExportButtonsEnabled(true);
+            }
+        }
     </script>
 </body>
 </html>
