@@ -105,16 +105,8 @@ def generate_html_for_pdf(
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     image_html = ''
-    if image_url:
-        image_html = f'''
-        <div class="image-section">
-            <h2>🖼️ 分析插图</h2>
-            <div class="image-container">
-                <img src="{image_url}" alt="分析插图" style="max-width: 100%; border-radius: 8px;">
-            </div>
-        </div>
-        '''
-    elif image_local_path and os.path.exists(image_local_path):
+    
+    if image_local_path and os.path.exists(image_local_path):
         import base64
         with open(image_local_path, 'rb') as f:
             img_data = base64.b64encode(f.read()).decode('utf-8')
@@ -123,6 +115,15 @@ def generate_html_for_pdf(
             <h2>🖼️ 分析插图</h2>
             <div class="image-container">
                 <img src="data:image/png;base64,{img_data}" alt="分析插图" style="max-width: 100%; border-radius: 8px;">
+            </div>
+        </div>
+        '''
+    elif image_url:
+        image_html = f'''
+        <div class="image-section">
+            <h2>🖼️ 分析插图</h2>
+            <div class="image-container">
+                <img src="{image_url}" alt="分析插图" style="max-width: 100%; border-radius: 8px;">
             </div>
         </div>
         '''

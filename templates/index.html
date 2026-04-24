@@ -905,11 +905,13 @@
             
             if (success) {
                 if (downloadUrl) {
+                    const filename = downloadUrl.split('/').pop();
                     resultContent.innerHTML = `
                         <div class="inline-flex items-center px-4 py-2 bg-green-50 text-green-700 rounded-lg">
                             <span class="mr-2">✅</span>
                             <span class="mr-2">${message}</span>
-                            <a href="${downloadUrl}" target="_blank" 
+                            <a href="${downloadUrl}" 
+                               download="${filename}"
                                class="text-green-700 underline hover:text-green-900 font-medium">
                                 点击下载
                             </a>
@@ -1056,11 +1058,13 @@
                                 </div>
                             `;
                         } else {
+                            const mdFilename = results.markdown.download_url.split('/').pop();
                             resultHtml += `
                                 <div class="inline-flex items-center px-4 py-2 bg-green-50 text-green-700 rounded-lg">
                                     <span class="mr-2">✅</span>
                                     <span class="mr-2">Markdown: ${results.markdown.filename}</span>
-                                    <a href="${results.markdown.download_url}" target="_blank" 
+                                    <a href="${results.markdown.download_url}" 
+                                       download="${mdFilename}"
                                        class="text-green-700 underline hover:text-green-900 font-medium">
                                         下载
                                     </a>
@@ -1078,11 +1082,13 @@
                                 </div>
                             `;
                         } else {
+                            const pdfFilename = results.pdf.download_url.split('/').pop();
                             resultHtml += `
                                 <div class="inline-flex items-center px-4 py-2 bg-green-50 text-green-700 rounded-lg">
                                     <span class="mr-2">✅</span>
                                     <span class="mr-2">PDF: ${results.pdf.filename}</span>
-                                    <a href="${results.pdf.download_url}" target="_blank" 
+                                    <a href="${results.pdf.download_url}" 
+                                       download="${pdfFilename}"
                                        class="text-green-700 underline hover:text-green-900 font-medium">
                                         下载
                                     </a>
