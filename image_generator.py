@@ -21,7 +21,25 @@ IMAGE_STYLES = {
 def get_image_prompt(event_description: str, analysis_summary: str, style: str = "infographic") -> str:
     style_description = IMAGE_STYLES.get(style, IMAGE_STYLES["infographic"])
     
+    has_chinese = any('\u4e00' <= c <= '\u9fff' for c in event_description)
+    
+    language_instruction = ""
+    if has_chinese:
+        language_instruction = """
+CRITICAL LANGUAGE REQUIREMENT:
+- All text, labels, and captions in the image MUST be in CHINESE
+- Use Simplified Chinese characters exclusively
+- Do NOT use any English text anywhere in the image
+- If you need to include numbers or statistics, keep them as numbers but add Chinese context
+"""
+    else:
+        language_instruction = """
+Language: Use the same language as the event description for any text in the image.
+"""
+    
     prompt = f"""Create a high-quality visual illustration for this event analysis report.
+
+{language_instruction}
 
 Event Description:
 {event_description[:500]}
@@ -44,6 +62,8 @@ Content Elements to Include:
 5. Balanced negative space for visual clarity
 
 Make it visually engaging and professional, suitable for a business or analysis report cover.
+
+IMPORTANT: Focus on creating a beautiful visual illustration. The visual elements should tell the story of the analysis.
 """
     return prompt
 
