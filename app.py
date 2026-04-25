@@ -342,7 +342,8 @@ def analyze_stream():
             'final_conclusion': ''
         }
         
-        total_elapsed_ms = 0
+        current_stage_key = None
+        current_stage_content = []
         
         try:
             for event in analyze_stream(content, stop_flag, result_id):
@@ -351,6 +352,9 @@ def analyze_stream():
                     break
                 
                 if stop_flag.is_stopped:
+                    if current_stage_key and current_stage_content:
+                        partial_results[current_stage_key] = ''.join(current_stage_content)
+                    
                     yield format_sse_event('stopped', {
                         'result_id': result_id,
                         'message': '分析已被用户中断',
@@ -359,35 +363,73 @@ def analyze_stream():
                     save_partial_result(result_id, content, partial_results)
                     break
                 
-                stage_key = None
-                for stage_enum, info in STAGE_INFO.items():
-                    if info['key'] == event.stage:
-                        stage_key = info['key']
-                        break
-                if not stage_key:
-                    if event.stage == 'user':
-                        stage_key = 'user_perspective'
-                    elif event.stage == 'product':
-                        stage_key = 'product_perspective'
-                    elif event.stage == 'topic':
-                        stage_key = 'topic_perspective'
-                    elif event.stage == 'course':
-                        stage_key = 'course_perspective'
-                    elif event.stage == 'conclusion':
-                        stage_key = 'final_conclusion'
+                event_type = event.event_type
                 
-                if event.is_error:
-                    yield format_sse_event('stage_error', {
+                if event_type == 'stage_start':
+                    stage = event.stage
+                    if stage == 'user':
+                        current_stage_key = 'user_perspective'
+                    elif stage == 'product':
+                        current_stage_key = 'product_perspective'
+                    elif stage == 'topic':
+                        current_stage_key = 'topic_perspective'
+                    elif stage == 'course':
+                        current_stage_key = 'course_perspective'
+                    elif stage == 'conclusion':
+                        current_stage_key = 'final_conclusion'
+                    
+                    current_stage_content = []
+                    
+                    yield format_sse_event('stage_start', {
+                        'result_id': result_id,
+                        'stage': event.stage,
+                        'stage_name': event.stage_name,
+                        'stage_description': event.stage_description
+                    })
+                
+                elif event_type == 'token':
+                    if event.token:
+                        current_stage_content.append(event.token)
+                    
+                    yield format_sse_event('token', {
+                        'result_id': result_id,
+                        'stage': event.stage,
+                        'stage_name': event.stage_name,
+                        'token': event.token
+                    })
+                
+                elif event_type == 'stage_end':
+                    stage = event.stage
+                    stage_key = None
+                    
+                    if stage == 'user':
+                        stage_key = 'user_perspective'
+                    elif stage == 'product':
+                        stage_key = 'product_perspective'
+                    elif stage == 'topic':
+                        stage_key = 'topic_perspective'
+                    elif stage == 'course':
+                        stage_key = 'course_perspective'
+                    elif stage == 'conclusion':
+                        stage_key = 'final_conclusion'
+                    
+                    if stage_key and event.content:
+                        partial_results[stage_key] = event.content
+                    elif stage_key and current_stage_content:
+                        partial_results[stage_key] = ''.join(current_stage_content)
+                    
+                    yield format_sse_event('stage_end', {
                         'result_id': result_id,
                         'stage': event.stage,
                         'stage_name': event.stage_name,
                         'stage_description': event.stage_description,
-                        'error_message': event.error_message
+                        'elapsed_ms': event.elapsed_ms,
+                        'content': event.content if event.content else ''.join(current_stage_content)
                     })
+                    
                     save_partial_result(result_id, content, partial_results)
-                    break
                 
-                if event.is_complete:
+                elif event_type == 'complete':
                     yield format_sse_event('complete', {
                         'result_id': result_id,
                         'elapsed_ms': event.elapsed_ms,
@@ -442,28 +484,34 @@ def analyze_stream():
                     
                     break
                 
-                if stage_key:
-                    partial_results[stage_key] = event.content
-                    total_elapsed_ms += event.elapsed_ms
+                elif event_type == 'error':
+                    yield format_sse_event('error', {
+                        'result_id': result_id,
+                        'stage': event.stage,
+                        'stage_name': event.stage_name,
+                        'error_message': event.error_message
+                    })
+                    save_partial_result(result_id, content, partial_results)
+                    break
                 
-                yield format_sse_event('stage', {
-                    'result_id': result_id,
-                    'stage': event.stage,
-                    'stage_name': event.stage_name,
-                    'stage_description': event.stage_description,
-                    'elapsed_ms': event.elapsed_ms,
-                    'content': event.content,
-                    'is_complete': event.is_complete,
-                    'is_error': event.is_error
-                })
-                
-                save_partial_result(result_id, content, partial_results)
+                elif event_type == 'stopped':
+                    yield format_sse_event('stopped', {
+                        'result_id': result_id,
+                        'message': event.content or '分析已被中断',
+                        'partial_results': partial_results
+                    })
+                    save_partial_result(result_id, content, partial_results)
+                    break
                 
         except GeneratorExit:
             stop_flag.stop()
             with streaming_lock:
                 if result_id in streaming_tasks:
                     del streaming_tasks[result_id]
+            
+            if current_stage_key and current_stage_content:
+                partial_results[current_stage_key] = ''.join(current_stage_content)
+            
             save_partial_result(result_id, content, partial_results)
             
         except Exception as e:
@@ -471,6 +519,10 @@ def analyze_stream():
                 'success': False,
                 'error': f'分析过程中发生错误: {str(e)}'
             })
+            
+            if current_stage_key and current_stage_content:
+                partial_results[current_stage_key] = ''.join(current_stage_content)
+            
             save_partial_result(result_id, content, partial_results)
         
         finally:

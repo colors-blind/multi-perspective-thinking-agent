@@ -50,17 +50,28 @@ STAGE_INFO = {
 }
 
 
+class EventType(Enum):
+    STAGE_START = "stage_start"
+    TOKEN = "token"
+    STAGE_END = "stage_end"
+    COMPLETE = "complete"
+    ERROR = "error"
+    STOPPED = "stopped"
+
+
 @dataclass
 class StreamEvent:
-    stage: str
-    stage_name: str
-    stage_description: str
-    elapsed_ms: float
-    content: str
-    result_id: str
+    event_type: str
+    stage: Optional[str] = None
+    stage_name: Optional[str] = None
+    stage_description: Optional[str] = None
+    elapsed_ms: float = 0.0
+    content: str = ""
+    result_id: str = ""
     is_complete: bool = False
     is_error: bool = False
     error_message: Optional[str] = None
+    token: str = ""
 
 
 def clean_llm_output(text) -> str:
@@ -248,6 +259,42 @@ def call_llm(system_prompt: str, user_content: str, context: Dict = None) -> str
     cleaned_content = clean_llm_output(content)
     return cleaned_content
 
+
+def call_llm_stream(system_prompt: str, user_content: str, context: Dict = None) -> Generator[str, None, str]:
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_content)
+    ]
+    
+    if context:
+        context_str = "\n\n【上下文信息】\n"
+        for key, value in context.items():
+            context_str += f"\n【{key}】\n{value}\n"
+        messages.append(HumanMessage(content=context_str))
+    
+    full_content = []
+    
+    for chunk in llm.stream(messages):
+        if hasattr(chunk, 'content') and chunk.content:
+            content = chunk.content
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, str):
+                        full_content.append(part)
+                        yield part
+                    elif isinstance(part, dict) and 'text' in part:
+                        text = part['text']
+                        full_content.append(text)
+                        yield text
+            elif isinstance(content, str):
+                full_content.append(content)
+                yield content
+    
+    final_content = ''.join(full_content)
+    cleaned_content = clean_llm_output(final_content)
+    return cleaned_content
+
+
 def analyze_user_perspective(state: AgentState) -> Dict:
     input_text = state["input_text"]
     result = call_llm(SYSTEM_PROMPTS["user"], input_text)
@@ -395,81 +442,128 @@ def analyze_stream(
         "final_conclusion": ""
     }
     
-    stages = [
-        (AnalysisStage.USER, lambda: call_llm(SYSTEM_PROMPTS["user"], input_text), "user_perspective"),
-        (AnalysisStage.PRODUCT, lambda: call_llm(SYSTEM_PROMPTS["product"], input_text), "product_perspective"),
-        (AnalysisStage.TOPIC, lambda: call_llm(SYSTEM_PROMPTS["topic"], input_text), "topic_perspective"),
-        (AnalysisStage.COURSE, lambda: call_llm(SYSTEM_PROMPTS["course"], input_text), "course_perspective"),
-        (
-            AnalysisStage.CONCLUSION,
-            lambda: call_llm(
-                SYSTEM_PROMPTS["conclusion"],
-                input_text,
-                {
+    def create_stage_config(stage_enum, state_key):
+        stage_info = STAGE_INFO[stage_enum]
+        return {
+            "enum": stage_enum,
+            "key": state_key,
+            "name": stage_info["name"],
+            "description": stage_info["description"],
+            "prompt": SYSTEM_PROMPTS[stage_enum.value],
+            "needs_context": stage_enum == AnalysisStage.CONCLUSION
+        }
+    
+    stage_configs = [
+        create_stage_config(AnalysisStage.USER, "user_perspective"),
+        create_stage_config(AnalysisStage.PRODUCT, "product_perspective"),
+        create_stage_config(AnalysisStage.TOPIC, "topic_perspective"),
+        create_stage_config(AnalysisStage.COURSE, "course_perspective"),
+        create_stage_config(AnalysisStage.CONCLUSION, "final_conclusion"),
+    ]
+    
+    for stage_config in stage_configs:
+        if stop_flag.is_stopped:
+            break
+        
+        stage_enum = stage_config["enum"]
+        stage_key = stage_config["key"]
+        stage_name = stage_config["name"]
+        stage_description = stage_config["description"]
+        system_prompt = stage_config["prompt"]
+        needs_context = stage_config["needs_context"]
+        
+        stage_start_event = StreamEvent(
+            event_type=EventType.STAGE_START.value,
+            stage=stage_enum.value,
+            stage_name=stage_name,
+            stage_description=stage_description,
+            result_id=result_id
+        )
+        yield stage_start_event
+        
+        try:
+            stage_start_time = time.time()
+            
+            context = None
+            if needs_context:
+                context = {
                     "用户思维分析": state["user_perspective"],
                     "产品思维分析": state["product_perspective"],
                     "选题思维分析": state["topic_perspective"],
                     "课程思维分析": state["course_perspective"]
                 }
-            ),
-            "final_conclusion"
-        )
-    ]
-    
-    for stage, analyzer, state_key in stages:
-        if stop_flag.is_stopped:
-            break
-        
-        stage_info = STAGE_INFO[stage]
-        
-        try:
-            stage_start_time = time.time()
             
-            content = analyzer()
+            full_content = []
+            stream_generator = call_llm_stream(system_prompt, input_text, context)
+            
+            while True:
+                if stop_flag.is_stopped:
+                    break
+                
+                try:
+                    token = next(stream_generator)
+                    if token:
+                        full_content.append(token)
+                        token_event = StreamEvent(
+                            event_type=EventType.TOKEN.value,
+                            stage=stage_enum.value,
+                            stage_name=stage_name,
+                            stage_description=stage_description,
+                            token=token,
+                            result_id=result_id
+                        )
+                        yield token_event
+                except StopIteration:
+                    break
             
             stage_elapsed_ms = (time.time() - stage_start_time) * 1000
             
-            state[state_key] = content
+            final_content = ''.join(full_content)
+            state[stage_key] = final_content
             
-            event = StreamEvent(
-                stage=stage.value,
-                stage_name=stage_info["name"],
-                stage_description=stage_info["description"],
+            stage_end_event = StreamEvent(
+                event_type=EventType.STAGE_END.value,
+                stage=stage_enum.value,
+                stage_name=stage_name,
+                stage_description=stage_description,
                 elapsed_ms=round(stage_elapsed_ms, 2),
-                content=content,
-                result_id=result_id,
-                is_complete=False,
-                is_error=False
+                content=final_content,
+                result_id=result_id
             )
-            
-            yield event
+            yield stage_end_event
             
         except Exception as e:
             error_event = StreamEvent(
-                stage=stage.value,
-                stage_name=stage_info["name"],
-                stage_description=stage_info["description"],
-                elapsed_ms=0,
-                content="",
+                event_type=EventType.ERROR.value,
+                stage=stage_enum.value,
+                stage_name=stage_name,
+                stage_description=stage_description,
                 result_id=result_id,
-                is_complete=False,
                 is_error=True,
                 error_message=str(e)
             )
             yield error_event
             break
     
+    if stop_flag.is_stopped:
+        stopped_event = StreamEvent(
+            event_type=EventType.STOPPED.value,
+            result_id=result_id,
+            content="分析已被中断"
+        )
+        yield stopped_event
+        return state
+    
     total_elapsed_ms = (time.time() - total_start_time) * 1000
     
     complete_event = StreamEvent(
+        event_type=EventType.COMPLETE.value,
         stage="complete",
         stage_name="分析完成",
         stage_description="所有阶段分析已完成",
         elapsed_ms=round(total_elapsed_ms, 2),
-        content="",
         result_id=result_id,
-        is_complete=True,
-        is_error=False
+        is_complete=True
     )
     yield complete_event
     
