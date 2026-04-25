@@ -129,6 +129,15 @@ llm = ChatGoogleGenerativeAI(
     temperature=0.3,
 )
 
+GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
+
+def get_genai_client():
+    try:
+        from google import genai
+        return genai.Client(api_key=GOOGLE_API_KEY)
+    except ImportError:
+        return None
+
 class AgentState(TypedDict):
     input_text: str
     user_perspective: str
@@ -261,6 +270,47 @@ def call_llm(system_prompt: str, user_content: str, context: Dict = None) -> str
 
 
 def call_llm_stream(system_prompt: str, user_content: str, context: Dict = None) -> Generator[str, None, str]:
+    client = get_genai_client()
+    
+    if client:
+        full_prompt = system_prompt + "\n\n" + user_content
+        
+        if context:
+            context_str = "\n\n【上下文信息】\n"
+            for key, value in context.items():
+                context_str += f"\n【{key}】\n{value}\n"
+            full_prompt += context_str
+        
+        full_content = []
+        
+        try:
+            response = client.models.generate_content_stream(
+                model=GEMINI_MODEL,
+                contents=full_prompt,
+                config={
+                    'temperature': 0.3,
+                }
+            )
+            
+            for chunk in response:
+                if hasattr(chunk, 'text') and chunk.text:
+                    text = chunk.text
+                    full_content.append(text)
+                    for char in text:
+                        yield char
+                    
+        except Exception as e:
+            print(f"Google GenAI stream error: {e}")
+            return call_llm_stream_fallback(system_prompt, user_content, context)
+        
+        final_content = ''.join(full_content)
+        cleaned_content = clean_llm_output(final_content)
+        return cleaned_content
+    else:
+        return call_llm_stream_fallback(system_prompt, user_content, context)
+
+
+def call_llm_stream_fallback(system_prompt: str, user_content: str, context: Dict = None) -> Generator[str, None, str]:
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_content)
@@ -281,14 +331,17 @@ def call_llm_stream(system_prompt: str, user_content: str, context: Dict = None)
                 for part in content:
                     if isinstance(part, str):
                         full_content.append(part)
-                        yield part
+                        for char in part:
+                            yield char
                     elif isinstance(part, dict) and 'text' in part:
                         text = part['text']
                         full_content.append(text)
-                        yield text
+                        for char in text:
+                            yield char
             elif isinstance(content, str):
                 full_content.append(content)
-                yield content
+                for char in content:
+                    yield char
     
     final_content = ''.join(full_content)
     cleaned_content = clean_llm_output(final_content)
