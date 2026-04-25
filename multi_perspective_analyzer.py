@@ -1,12 +1,66 @@
 import os
 import re
-from typing import Dict, List, Annotated, TypedDict
+import time
+import uuid
+from typing import Dict, List, Annotated, TypedDict, Optional, Generator, Any
+from dataclasses import dataclass
+from enum import Enum
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 load_dotenv()
+
+
+class AnalysisStage(Enum):
+    USER = "user"
+    PRODUCT = "product"
+    TOPIC = "topic"
+    COURSE = "course"
+    CONCLUSION = "conclusion"
+
+
+STAGE_INFO = {
+    AnalysisStage.USER: {
+        "name": "用户思维",
+        "description": "相关人群的真实感受、担忧与期待",
+        "key": "user_perspective"
+    },
+    AnalysisStage.PRODUCT: {
+        "name": "产品思维",
+        "description": "需求缺口分析与产品解决方案",
+        "key": "product_perspective"
+    },
+    AnalysisStage.TOPIC: {
+        "name": "选题思维",
+        "description": "社会情绪洞察与传播价值分析",
+        "key": "topic_perspective"
+    },
+    AnalysisStage.COURSE: {
+        "name": "课程思维",
+        "description": "可提炼的方法论与教育价值",
+        "key": "course_perspective"
+    },
+    AnalysisStage.CONCLUSION: {
+        "name": "综合结论",
+        "description": "整合四维度分析的深度洞察",
+        "key": "final_conclusion"
+    }
+}
+
+
+@dataclass
+class StreamEvent:
+    stage: str
+    stage_name: str
+    stage_description: str
+    elapsed_ms: float
+    content: str
+    result_id: str
+    is_complete: bool = False
+    is_error: bool = False
+    error_message: Optional[str] = None
 
 
 def clean_llm_output(text) -> str:
@@ -305,3 +359,137 @@ def format_result(result: Dict) -> str:
 """
     
     return output
+
+
+class AnalysisStopFlag:
+    def __init__(self):
+        self._stopped = False
+    
+    def stop(self):
+        self._stopped = True
+    
+    @property
+    def is_stopped(self):
+        return self._stopped
+
+
+def analyze_stream(
+    input_text: str,
+    stop_flag: Optional[AnalysisStopFlag] = None,
+    result_id: Optional[str] = None
+) -> Generator[StreamEvent, None, Dict]:
+    if stop_flag is None:
+        stop_flag = AnalysisStopFlag()
+    
+    if result_id is None:
+        result_id = str(uuid.uuid4())
+    
+    total_start_time = time.time()
+    
+    state = {
+        "input_text": input_text,
+        "user_perspective": "",
+        "product_perspective": "",
+        "topic_perspective": "",
+        "course_perspective": "",
+        "final_conclusion": ""
+    }
+    
+    stages = [
+        (AnalysisStage.USER, lambda: call_llm(SYSTEM_PROMPTS["user"], input_text), "user_perspective"),
+        (AnalysisStage.PRODUCT, lambda: call_llm(SYSTEM_PROMPTS["product"], input_text), "product_perspective"),
+        (AnalysisStage.TOPIC, lambda: call_llm(SYSTEM_PROMPTS["topic"], input_text), "topic_perspective"),
+        (AnalysisStage.COURSE, lambda: call_llm(SYSTEM_PROMPTS["course"], input_text), "course_perspective"),
+        (
+            AnalysisStage.CONCLUSION,
+            lambda: call_llm(
+                SYSTEM_PROMPTS["conclusion"],
+                input_text,
+                {
+                    "用户思维分析": state["user_perspective"],
+                    "产品思维分析": state["product_perspective"],
+                    "选题思维分析": state["topic_perspective"],
+                    "课程思维分析": state["course_perspective"]
+                }
+            ),
+            "final_conclusion"
+        )
+    ]
+    
+    for stage, analyzer, state_key in stages:
+        if stop_flag.is_stopped:
+            break
+        
+        stage_info = STAGE_INFO[stage]
+        
+        try:
+            stage_start_time = time.time()
+            
+            content = analyzer()
+            
+            stage_elapsed_ms = (time.time() - stage_start_time) * 1000
+            
+            state[state_key] = content
+            
+            event = StreamEvent(
+                stage=stage.value,
+                stage_name=stage_info["name"],
+                stage_description=stage_info["description"],
+                elapsed_ms=round(stage_elapsed_ms, 2),
+                content=content,
+                result_id=result_id,
+                is_complete=False,
+                is_error=False
+            )
+            
+            yield event
+            
+        except Exception as e:
+            error_event = StreamEvent(
+                stage=stage.value,
+                stage_name=stage_info["name"],
+                stage_description=stage_info["description"],
+                elapsed_ms=0,
+                content="",
+                result_id=result_id,
+                is_complete=False,
+                is_error=True,
+                error_message=str(e)
+            )
+            yield error_event
+            break
+    
+    total_elapsed_ms = (time.time() - total_start_time) * 1000
+    
+    complete_event = StreamEvent(
+        stage="complete",
+        stage_name="分析完成",
+        stage_description="所有阶段分析已完成",
+        elapsed_ms=round(total_elapsed_ms, 2),
+        content="",
+        result_id=result_id,
+        is_complete=True,
+        is_error=False
+    )
+    yield complete_event
+    
+    return state
+
+
+def analyze_text_streaming(
+    input_text: str,
+    stop_flag: Optional[AnalysisStopFlag] = None,
+    result_id: Optional[str] = None
+) -> Dict:
+    if stop_flag is None:
+        stop_flag = AnalysisStopFlag()
+    
+    if result_id is None:
+        result_id = str(uuid.uuid4())
+    
+    final_state = None
+    for event in analyze_stream(input_text, stop_flag, result_id):
+        if event.is_complete:
+            pass
+    
+    return analyze_text(input_text)
