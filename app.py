@@ -2,11 +2,18 @@ import os
 import json
 import uuid
 import threading
+import time
 from datetime import datetime
-from typing import Dict, Any, Optional
-from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
+from typing import Dict, Any, Optional, Generator
+from flask import Flask, render_template, request, jsonify, send_from_directory, send_file, Response
 from flask_cors import CORS
-from multi_perspective_analyzer import analyze_text
+from multi_perspective_analyzer import (
+    analyze_text,
+    analyze_stream,
+    AnalysisStopFlag,
+    STAGE_INFO,
+    AnalysisStage
+)
 from url_extractor import extract_content_from_url, is_valid_url
 from html_generator import generate_html_report
 from image_generator import generate_image, save_image, IMAGE_STYLES
@@ -27,6 +34,9 @@ tasks_lock = threading.Lock()
 
 analysis_results: Dict[str, Dict[str, Any]] = {}
 results_lock = threading.Lock()
+
+streaming_tasks: Dict[str, Dict[str, Any]] = {}
+streaming_lock = threading.Lock()
 
 
 def update_task_status(task_id: str, status: str, progress: int = 0, image_url: str = None, error: str = None):
@@ -216,6 +226,335 @@ def health():
     return jsonify({
         'status': 'ok',
         'message': '多视角分析Agent服务正常运行'
+    })
+
+
+def save_partial_result(
+    result_id: str,
+    input_text: str,
+    partial_results: Dict,
+    image_task_id: Optional[str] = None
+):
+    with results_lock:
+        analysis_results[result_id] = {
+            'result_id': result_id,
+            'analysis_data': {
+                'input_text': input_text,
+                'user_perspective': partial_results.get('user_perspective', ''),
+                'product_perspective': partial_results.get('product_perspective', ''),
+                'topic_perspective': partial_results.get('topic_perspective', ''),
+                'course_perspective': partial_results.get('course_perspective', ''),
+                'final_conclusion': partial_results.get('final_conclusion', ''),
+            },
+            'image_task_id': image_task_id,
+            'created_at': datetime.now().isoformat(),
+            'is_partial': True
+        }
+
+
+def format_sse_event(event_type: str, data: Dict) -> str:
+    data_str = json.dumps(data, ensure_ascii=False)
+    return f'event: {event_type}\ndata: {data_str}\n\n'
+
+
+@app.route('/api/analyze/stream', methods=['POST'])
+def analyze_stream():
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return Response(
+                format_sse_event('error', {
+                    'success': False,
+                    'error': '请求数据为空'
+                }),
+                mimetype='text/event-stream',
+                headers={
+                    'Cache-Control': 'no-cache',
+                    'X-Accel-Buffering': 'no'
+                }
+            )
+        
+        input_type = data.get('type', 'text')
+        content = data.get('content', '')
+        image_style = data.get('image_style', 'infographic')
+        
+        if not content:
+            return Response(
+                format_sse_event('error', {
+                    'success': False,
+                    'error': '输入内容不能为空'
+                }),
+                mimetype='text/event-stream',
+                headers={
+                    'Cache-Control': 'no-cache',
+                    'X-Accel-Buffering': 'no'
+                }
+            )
+        
+        if image_style not in IMAGE_STYLES:
+            image_style = 'infographic'
+        
+        original_content = content
+        
+        if input_type == 'url':
+            if not is_valid_url(content):
+                return Response(
+                    format_sse_event('error', {
+                        'success': False,
+                        'error': 'URL格式不正确，请确保包含 http:// 或 https://'
+                    }),
+                    mimetype='text/event-stream',
+                    headers={
+                        'Cache-Control': 'no-cache',
+                        'X-Accel-Buffering': 'no'
+                    }
+                )
+            
+            try:
+                yield format_sse_event('info', {
+                    'message': '正在获取URL内容...'
+                })
+                url_result = extract_content_from_url(content)
+                content = url_result['full_text']
+            except Exception as e:
+                yield format_sse_event('error', {
+                    'success': False,
+                    'error': f'获取URL内容失败: {str(e)}'
+                })
+                return
+        
+        result_id = str(uuid.uuid4())
+        stop_flag = AnalysisStopFlag()
+        
+        with streaming_lock:
+            streaming_tasks[result_id] = {
+                'result_id': result_id,
+                'stop_flag': stop_flag,
+                'created_at': datetime.now().isoformat()
+            }
+        
+        partial_results = {
+            'user_perspective': '',
+            'product_perspective': '',
+            'topic_perspective': '',
+            'course_perspective': '',
+            'final_conclusion': ''
+        }
+        
+        current_stage_key = None
+        current_stage_content = []
+        
+        try:
+            for event in analyze_stream(content, stop_flag, result_id):
+                if request.environ.get('werkzeug.server.shutdown'):
+                    stop_flag.stop()
+                    break
+                
+                if stop_flag.is_stopped:
+                    if current_stage_key and current_stage_content:
+                        partial_results[current_stage_key] = ''.join(current_stage_content)
+                    
+                    yield format_sse_event('stopped', {
+                        'result_id': result_id,
+                        'message': '分析已被用户中断',
+                        'partial_results': partial_results
+                    })
+                    save_partial_result(result_id, content, partial_results)
+                    break
+                
+                event_type = event.event_type
+                
+                if event_type == 'stage_start':
+                    stage = event.stage
+                    if stage == 'user':
+                        current_stage_key = 'user_perspective'
+                    elif stage == 'product':
+                        current_stage_key = 'product_perspective'
+                    elif stage == 'topic':
+                        current_stage_key = 'topic_perspective'
+                    elif stage == 'course':
+                        current_stage_key = 'course_perspective'
+                    elif stage == 'conclusion':
+                        current_stage_key = 'final_conclusion'
+                    
+                    current_stage_content = []
+                    
+                    yield format_sse_event('stage_start', {
+                        'result_id': result_id,
+                        'stage': event.stage,
+                        'stage_name': event.stage_name,
+                        'stage_description': event.stage_description
+                    })
+                
+                elif event_type == 'token':
+                    if event.token:
+                        current_stage_content.append(event.token)
+                    
+                    yield format_sse_event('token', {
+                        'result_id': result_id,
+                        'stage': event.stage,
+                        'stage_name': event.stage_name,
+                        'token': event.token
+                    })
+                
+                elif event_type == 'stage_end':
+                    stage = event.stage
+                    stage_key = None
+                    
+                    if stage == 'user':
+                        stage_key = 'user_perspective'
+                    elif stage == 'product':
+                        stage_key = 'product_perspective'
+                    elif stage == 'topic':
+                        stage_key = 'topic_perspective'
+                    elif stage == 'course':
+                        stage_key = 'course_perspective'
+                    elif stage == 'conclusion':
+                        stage_key = 'final_conclusion'
+                    
+                    if stage_key and event.content:
+                        partial_results[stage_key] = event.content
+                    elif stage_key and current_stage_content:
+                        partial_results[stage_key] = ''.join(current_stage_content)
+                    
+                    yield format_sse_event('stage_end', {
+                        'result_id': result_id,
+                        'stage': event.stage,
+                        'stage_name': event.stage_name,
+                        'stage_description': event.stage_description,
+                        'elapsed_ms': event.elapsed_ms,
+                        'content': event.content if event.content else ''.join(current_stage_content)
+                    })
+                    
+                    save_partial_result(result_id, content, partial_results)
+                
+                elif event_type == 'complete':
+                    yield format_sse_event('complete', {
+                        'result_id': result_id,
+                        'elapsed_ms': event.elapsed_ms,
+                        'message': '所有阶段分析已完成'
+                    })
+                    
+                    with results_lock:
+                        analysis_results[result_id] = {
+                            'result_id': result_id,
+                            'analysis_data': {
+                                'input_text': content,
+                                'user_perspective': partial_results.get('user_perspective', ''),
+                                'product_perspective': partial_results.get('product_perspective', ''),
+                                'topic_perspective': partial_results.get('topic_perspective', ''),
+                                'course_perspective': partial_results.get('course_perspective', ''),
+                                'final_conclusion': partial_results.get('final_conclusion', ''),
+                            },
+                            'image_task_id': None,
+                            'created_at': datetime.now().isoformat()
+                        }
+                    
+                    task_id = str(uuid.uuid4())
+                    with tasks_lock:
+                        image_tasks[task_id] = {
+                            'task_id': task_id,
+                            'status': 'pending',
+                            'progress': 0,
+                            'image_url': None,
+                            'error': None,
+                            'created_at': datetime.now().isoformat(),
+                            'updated_at': datetime.now().isoformat()
+                        }
+                    
+                    with results_lock:
+                        if result_id in analysis_results:
+                            analysis_results[result_id]['image_task_id'] = task_id
+                    
+                    analysis_data_for_image = {
+                        'user_perspective': partial_results.get('user_perspective', ''),
+                        'product_perspective': partial_results.get('product_perspective', ''),
+                        'topic_perspective': partial_results.get('topic_perspective', ''),
+                        'course_perspective': partial_results.get('course_perspective', ''),
+                        'final_conclusion': partial_results.get('final_conclusion', ''),
+                    }
+                    
+                    thread = threading.Thread(
+                        target=generate_image_task,
+                        args=(task_id, original_content, analysis_data_for_image, image_style)
+                    )
+                    thread.daemon = True
+                    thread.start()
+                    
+                    break
+                
+                elif event_type == 'error':
+                    yield format_sse_event('error', {
+                        'result_id': result_id,
+                        'stage': event.stage,
+                        'stage_name': event.stage_name,
+                        'error_message': event.error_message
+                    })
+                    save_partial_result(result_id, content, partial_results)
+                    break
+                
+                elif event_type == 'stopped':
+                    yield format_sse_event('stopped', {
+                        'result_id': result_id,
+                        'message': event.content or '分析已被中断',
+                        'partial_results': partial_results
+                    })
+                    save_partial_result(result_id, content, partial_results)
+                    break
+                
+        except GeneratorExit:
+            stop_flag.stop()
+            with streaming_lock:
+                if result_id in streaming_tasks:
+                    del streaming_tasks[result_id]
+            
+            if current_stage_key and current_stage_content:
+                partial_results[current_stage_key] = ''.join(current_stage_content)
+            
+            save_partial_result(result_id, content, partial_results)
+            
+        except Exception as e:
+            yield format_sse_event('error', {
+                'success': False,
+                'error': f'分析过程中发生错误: {str(e)}'
+            })
+            
+            if current_stage_key and current_stage_content:
+                partial_results[current_stage_key] = ''.join(current_stage_content)
+            
+            save_partial_result(result_id, content, partial_results)
+        
+        finally:
+            with streaming_lock:
+                if result_id in streaming_tasks:
+                    del streaming_tasks[result_id]
+    
+    except Exception as e:
+        yield format_sse_event('error', {
+            'success': False,
+            'error': f'请求处理失败: {str(e)}'
+        })
+
+
+@app.route('/api/analyze/<result_id>/stop', methods=['POST'])
+def stop_analysis(result_id):
+    with streaming_lock:
+        task = streaming_tasks.get(result_id)
+    
+    if not task:
+        return jsonify({
+            'success': False,
+            'error': '未找到对应的分析任务'
+        }), 404
+    
+    stop_flag = task.get('stop_flag')
+    if stop_flag:
+        stop_flag.stop()
+    
+    return jsonify({
+        'success': True,
+        'message': '已发送停止信号，分析将在下一阶段停止'
     })
 
 @app.route('/api/export/markdown', methods=['POST'])
@@ -469,7 +808,9 @@ if __name__ == '__main__':
     print("\n📌 服务地址: http://localhost:5000")
     print("📌 API文档:")
     print("   - GET  /                        -> 主页")
-    print("   - POST /api/analyze             -> 分析接口")
+    print("   - POST /api/analyze             -> 分析接口（非流式，向后兼容）")
+    print("   - POST /api/analyze/stream       -> 分析接口（流式SSE，推荐）")
+    print("   - POST /api/analyze/<id>/stop    -> 停止流式分析")
     print("   - GET  /api/image-status/<id>    -> 图片生成状态")
     print("   - GET  /api/image-styles        -> 图片风格列表")
     print("   - POST /api/export/markdown    -> 导出Markdown")
