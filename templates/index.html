@@ -544,6 +544,49 @@
         let imagePollingInterval = null;
         let currentResultId = null;
         
+        let streamingController = null;
+        let streamingState = {
+            resultId: null,
+            currentStage: null,
+            stageContents: {
+                user: '',
+                product: '',
+                topic: '',
+                course: '',
+                conclusion: ''
+            },
+            stageElapsed: {},
+            imageTaskId: null
+        };
+        
+        const stageConfig = {
+            user: {
+                name: '用户思维',
+                description: '相关人群的真实感受、担忧与期待',
+                elementId: 'user-content'
+            },
+            product: {
+                name: '产品思维',
+                description: '需求缺口分析与产品解决方案',
+                elementId: 'product-content'
+            },
+            topic: {
+                name: '选题思维',
+                description: '社会情绪洞察与传播价值分析',
+                elementId: 'topic-content'
+            },
+            course: {
+                name: '课程思维',
+                description: '可提炼的方法论与教育价值',
+                elementId: 'course-content'
+            },
+            conclusion: {
+                name: '综合结论',
+                description: '整合四维度分析的深度洞察',
+                elementId: 'conclusion-content'
+            }
+        };
+        
         function switchInputType(type) {
             currentInputType = type;
             
@@ -775,6 +818,262 @@
             document.getElementById('loading-section').classList.remove('hidden');
         }
         
+        function initStreamingDisplay() {
+            streamingState = {
+                resultId: null,
+                currentStage: null,
+                stageContents: {
+                    user: '',
+                    product: '',
+                    topic: '',
+                    course: '',
+                    conclusion: ''
+                },
+                stageElapsed: {},
+                imageTaskId: null
+            };
+            
+            hideLoading();
+            document.getElementById('error-section').classList.add('hidden');
+            document.getElementById('input-section').classList.remove('hidden');
+            document.getElementById('result-section').classList.remove('hidden');
+            
+            Object.keys(stageConfig).forEach(stage => {
+                const element = document.getElementById(stageConfig[stage].elementId);
+                if (element) {
+                    element.innerHTML = '<div class="text-gray-400 italic">等待分析...</div>';
+                }
+            });
+            
+            document.getElementById('html-report-link').classList.add('hidden');
+            resetExportStatus();
+            resetImageSection();
+            
+            document.getElementById('result-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        
+        function updateStreamingContent(stage, content, isComplete = false) {
+            const config = stageConfig[stage];
+            if (!config) return;
+            
+            const element = document.getElementById(config.elementId);
+            if (!element) return;
+            
+            if (content) {
+                element.innerHTML = parseMarkdown(content);
+            } else if (!isComplete) {
+                element.innerHTML = '<div class="text-gray-400 italic">正在分析中...</div>';
+            }
+        }
+        
+        function handleStageStart(event) {
+            const stage = event.stage;
+            const config = stageConfig[stage];
+            
+            if (!config) return;
+            
+            streamingState.currentStage = stage;
+            streamingState.stageContents[stage] = '';
+            
+            const element = document.getElementById(config.elementId);
+            if (element) {
+                element.innerHTML = `
+                    <div class="flex items-center text-blue-500">
+                        <div class="animate-spin mr-2" style="border: 2px solid #3b82f6; border-radius: 50%; border-top-color: transparent; width: 16px; height: 16px;"></div>
+                        <span class="font-medium">正在分析 ${config.name}...</span>
+                    </div>
+                `;
+            }
+        }
+        
+        function handleToken(event) {
+            const stage = event.stage;
+            const token = event.token || '';
+            
+            if (!stage || !token) return;
+            
+            streamingState.stageContents[stage] += token;
+            updateStreamingContent(stage, streamingState.stageContents[stage]);
+        }
+        
+        function handleStageEnd(event) {
+            const stage = event.stage;
+            const content = event.content || streamingState.stageContents[stage];
+            const elapsedMs = event.elapsed_ms || 0;
+            
+            if (stage) {
+                streamingState.stageContents[stage] = content;
+                streamingState.stageElapsed[stage] = elapsedMs;
+                streamingState.currentStage = null;
+                
+                const config = stageConfig[stage];
+                if (config) {
+                    const element = document.getElementById(config.elementId);
+                    if (element) {
+                        element.innerHTML = parseMarkdown(content);
+                    }
+                }
+            }
+        }
+        
+        function handleStreamingComplete(event) {
+            currentResultId = streamingState.resultId;
+            
+            if (event.result_id) {
+                currentResultId = event.result_id;
+                streamingState.resultId = event.result_id;
+            }
+            
+            setExportButtonsEnabled(true);
+            
+            if (streamingState.imageTaskId) {
+                resetImageSection();
+                pollImageStatus(streamingState.imageTaskId);
+            }
+            
+            document.getElementById('analyze-btn').disabled = false;
+            document.getElementById('analyze-btn').innerHTML = '<span>🚀 开始分析</span>';
+        }
+        
+        function handleStreamingError(event) {
+            const errorMessage = event.error_message || event.error || '流式分析失败';
+            showError(errorMessage);
+            
+            document.getElementById('analyze-btn').disabled = false;
+            document.getElementById('analyze-btn').innerHTML = '<span>🚀 开始分析</span>';
+        }
+        
+        function parseSSELine(line) {
+            if (line.startsWith('event: ')) {
+                return { type: 'event', value: line.substring(7) };
+            } else if (line.startsWith('data: ')) {
+                return { type: 'data', value: line.substring(6) };
+            }
+            return null;
+        }
+        
+        async function startStreamingAnalysis(inputType, content, imageStyle) {
+            if (streamingController) {
+                streamingController.abort();
+                streamingController = null;
+            }
+            
+            streamingController = new AbortController();
+            initStreamingDisplay();
+            
+            let buffer = '';
+            let currentEventType = null;
+            let currentData = null;
+            
+            try {
+                const response = await fetch('/api/analyze/stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        type: inputType,
+                        content: content,
+                        image_style: imageStyle
+                    }),
+                    signal: streamingController.signal
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`请求失败: ${response.status} - ${errorText}`);
+                }
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) {
+                        break;
+                    }
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+                    
+                    for (const line of lines) {
+                        if (!line.trim()) {
+                            if (currentEventType && currentData !== null) {
+                                try {
+                                    const eventData = JSON.parse(currentData);
+                                    
+                                    switch (currentEventType) {
+                                        case 'stage_start':
+                                            if (!streamingState.resultId && eventData.result_id) {
+                                                streamingState.resultId = eventData.result_id;
+                                            }
+                                            handleStageStart(eventData);
+                                            break;
+                                            
+                                        case 'token':
+                                            handleToken(eventData);
+                                            break;
+                                            
+                                        case 'stage_end':
+                                            handleStageEnd(eventData);
+                                            break;
+                                            
+                                        case 'complete':
+                                            if (eventData.result_id) {
+                                                streamingState.resultId = eventData.result_id;
+                                            }
+                                            handleStreamingComplete(eventData);
+                                            break;
+                                            
+                                        case 'error':
+                                            handleStreamingError(eventData);
+                                            break;
+                                            
+                                        case 'stopped':
+                                            showError('分析已被中断');
+                                            break;
+                                            
+                                        case 'info':
+                                            console.log('Info:', eventData.message);
+                                            break;
+                                    }
+                                } catch (e) {
+                                    console.error('解析SSE事件失败:', e, 'Data:', currentData);
+                                }
+                                
+                                currentEventType = null;
+                                currentData = null;
+                            }
+                            continue;
+                        }
+                        
+                        const parsed = parseSSELine(line);
+                        if (parsed) {
+                            if (parsed.type === 'event') {
+                                currentEventType = parsed.value;
+                            } else if (parsed.type === 'data') {
+                                currentData = parsed.value;
+                            }
+                        }
+                    }
+                }
+                
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    console.log('流式分析已被取消');
+                } else {
+                    showError('流式分析失败: ' + error.message);
+                }
+            } finally {
+                streamingController = null;
+                document.getElementById('analyze-btn').disabled = false;
+                document.getElementById('analyze-btn').innerHTML = '<span>🚀 开始分析</span>';
+            }
+        }
+        
         function hideLoading() {
             document.getElementById('loading-section').classList.add('hidden');
         }
@@ -838,47 +1137,7 @@
             analyzeBtn.disabled = true;
             analyzeBtn.innerHTML = '<span>⏳ 分析中...</span>';
             
-            showLoading();
-            
-            try {
-                const response = await fetch('/api/analyze', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        type: currentInputType,
-                        content: content,
-                        image_style: currentImageStyle
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    currentResultId = data.result_id;
-                    showResult(data.data);
-                    
-                    if (data.html_report) {
-                        htmlReportUrl = data.html_report;
-                        document.getElementById('html-report-link').href = data.html_report;
-                    }
-                    
-                    if (data.image_task_id) {
-                        resetImageSection();
-                        pollImageStatus(data.image_task_id);
-                    }
-                    
-                    resetExportStatus();
-                } else {
-                    showError(data.error || '分析失败，请稍后重试');
-                }
-            } catch (error) {
-                showError('网络请求失败: ' + error.message);
-            } finally {
-                analyzeBtn.disabled = false;
-                analyzeBtn.innerHTML = '<span>🚀 开始分析</span>';
-            }
+            await startStreamingAnalysis(currentInputType, content, currentImageStyle);
         }
         
         document.getElementById('text-input').addEventListener('input', updateCharCount);
